@@ -1,0 +1,112 @@
+# Relay: Sentry alert → GitHub issue (label `sentry`) → Copilot cloud agent.
+#
+# Sentry's GitHub integration creates the issue. This job assigns it to
+# copilot-swe-agent so a cloud agent session starts. The session uses the
+# sentry-autofix custom agent (.github/agents/sentry-autofix.agent.md), which
+# connects to Sentry over MCP.
+#
+# Secrets:
+#   COPILOT_ASSIGN_PAT — Actions secret. User token (fine-grained PAT with
+#     read access to metadata and read/write on actions, contents, issues,
+#     and pull requests). The workflow GITHUB_TOKEN cannot assign Copilot.
+#   COPILOT_MCP_SENTRY_ACCESS_TOKEN — Agents secret (Settings → Secrets and
+#     variables → Agents), not an Actions secret. Sentry user auth token with
+#     org:read, project:read, project:write, team:read, team:write, event:write.
+#     Only secrets prefixed COPILOT_MCP_ are visible to the MCP server.
+#
+# Note: `issues` events only run workflows from the default branch.
+
+name: Assign Sentry issues to Copilot
+
+on:
+  issues:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub issue number to assign to Copilot"
+        required: true
+        type: string
+
+concurrency:
+  group: sentry-to-copilot-${{ github.event.issue.number || inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  assign:
+    # An issue created with the label emits both `opened` and `labeled`.
+    # `opened` handles that case; `labeled` only counts when the `sentry` label
+    # is added to an issue that already existed (checked in the first step).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'sentry')) ||
+      (github.event.action == 'labeled' && github.event.label.name == 'sentry')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Skip duplicate labeled event on new issues
+        id: dedupe
+        env:
+          ACTION: ${{ github.event.action }}
+          CREATED_AT: ${{ github.event.issue.created_at }}
+        run: |
+          skip=false
+          if [ "$ACTION" = "labeled" ]; then
+            age=$(( $(date -u +%s) - $(date -u -d "$CREATED_AT" +%s) ))
+            if [ "$age" -lt 120 ]; then
+              echo "Issue is ${age}s old; the 'opened' run handles it."
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Assign Copilot cloud agent
+        if: steps.dedupe.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_PAT }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::COPILOT_ASSIGN_PAT must be set to a user token that can assign Copilot."
+            exit 1
+          fi
+          if ! [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Issue number must be numeric."
+            exit 1
+          fi
+
+          already=$(gh api --jq 'any(.assignees[]; .login == "copilot-swe-agent[bot]")' \
+            "/repos/${REPO}/issues/${ISSUE_NUMBER}")
+          if [ "$already" = "true" ]; then
+            echo "Copilot is already assigned to issue #${ISSUE_NUMBER}."
+            {
+              echo "### Copilot already assigned"
+              echo "Issue: https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          jq -n \
+            --arg repo "$REPO" \
+            '{
+              assignees: ["copilot-swe-agent[bot]"],
+              agent_assignment: {
+                target_repo: $repo,
+                base_branch: "master",
+                custom_agent: "sentry-autofix",
+                custom_instructions: "This issue was opened by the Sentry GitHub integration. Investigate the Sentry issue it links to and open a draft pull request with the fix."
+              }
+            }' | gh api --method POST \
+              --input - \
+              "/repos/${REPO}/issues/${ISSUE_NUMBER}/assignees"
+
+          {
+            echo "### Copilot cloud agent assigned"
+            echo "Issue: https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
+            echo "Agent: sentry-autofix"
+          } >> "$GITHUB_STEP_SUMMARY"
