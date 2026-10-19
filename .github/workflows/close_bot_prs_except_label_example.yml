@@ -2,9 +2,10 @@ name: close_bot_prs_except_label_example
 run-name: Run triggered by ${{ github.event_name }}
 
 on:
-  schedule: # every hour
-    - cron:  '0 * * * *'
-    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
+  # Disabled on this fork. This job closes bot PRs in sentry-demos/empower.
+  # schedule: # every hour
+  #   - cron:  '0 * * * *'
+  #   # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
   workflow_dispatch:
 
 # Only run 1 workflow at a time. If new one starts abort any that are already running.

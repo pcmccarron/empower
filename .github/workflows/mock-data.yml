@@ -1,8 +1,10 @@
 name: mock-data.yml
 on:
-  #push:
-  #  branches: [master, test-me-*]
-  #pull_request:
+  # Disabled on this fork. An empty `on:` makes GitHub fail the workflow on every push.
+  # push:
+  #   branches: [master, test-me-*]
+  # pull_request:
+  workflow_dispatch:
 
 jobs:
   mock-data:
