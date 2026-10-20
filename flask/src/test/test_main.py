@@ -105,3 +105,17 @@
 
 # if __name__ == '__main__':
 #     unittest.main()
+
+import re
+import unittest
+from pathlib import Path
+
+
+class TestLocalBackendConfiguration(unittest.TestCase):
+    def test_ruby_on_rails_port_avoids_airplay_receiver(self):
+        env_base = Path(__file__).resolve().parents[3] / ".local.env.base"
+        config = env_base.read_text()
+        port = re.search(r"^RUBYONRAILS_LOCAL_PORT=(\d+)", config, re.MULTILINE)
+
+        self.assertIsNotNone(port)
+        self.assertEqual(port.group(1), "5001")
