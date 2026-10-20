@@ -1,0 +1,262 @@
+# Reset the Copilot demo on this fork.
+#
+# Run this from the Actions tab when you want a clean slate. It closes open
+# pull requests, deletes open GitHub issues, and removes Sentry issues in the
+# empower-* projects. The next new error can then open a fresh GitHub issue.
+#
+# Type "reset" in the confirm field. Use dry_run first to see the list.
+#
+# Secrets (both are Actions secrets, not Agents secrets):
+#   COPILOT_ASSIGN_PAT — user token that can close pull requests and delete
+#     issues on pcmccarron/empower.
+#   COPILOT_MCP_SENTRY_ACCESS_TOKEN — Sentry user token. Deleting issues
+#     requires event:admin. With only event:write, this workflow resolves the
+#     Sentry issues instead, and the existing alert still fires on regression.
+
+name: Reset demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type reset to close pull requests and delete the demo issues"
+        required: true
+        type: string
+      dry_run:
+        description: "List what would change, then stop"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: reset-demo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Close pull requests and delete demo issues
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_PAT }}
+          SENTRY_TOKEN: ${{ secrets.COPILOT_MCP_SENTRY_ACCESS_TOKEN }}
+          CONFIRM: ${{ inputs.confirm }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPO: ${{ github.repository }}
+          SUMMARY: ${{ github.step_summary }}
+        run: |
+          python3 << 'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          REPO = os.environ["REPO"]
+          ORG = "pcmccarron"
+          SENTRY_API = "https://us.sentry.io"
+          DRY_RUN = os.environ.get("DRY_RUN", "false") == "true"
+          failures = []
+          lines = []
+
+          def note(message):
+              print(message)
+              lines.append(message)
+
+          if os.environ.get("CONFIRM") != "reset":
+              note("Confirmation was not reset. Nothing was changed.")
+              sys.exit(1)
+          if REPO != "pcmccarron/empower":
+              note(f"Refusing to run on {REPO}. This reset is only for pcmccarron/empower.")
+              sys.exit(1)
+          if not os.environ.get("GH_TOKEN"):
+              note("COPILOT_ASSIGN_PAT is not set.")
+              sys.exit(1)
+          if not os.environ.get("SENTRY_TOKEN"):
+              note("COPILOT_MCP_SENTRY_ACCESS_TOKEN is not set.")
+              sys.exit(1)
+
+          def gh(args):
+              result = subprocess.run(
+                  ["gh", *args],
+                  text=True,
+                  capture_output=True,
+                  check=False,
+              )
+              if result.returncode != 0:
+                  detail = (result.stderr or result.stdout).strip()
+                  raise RuntimeError(detail or f"gh {' '.join(args)} failed")
+              return result.stdout
+
+          def next_link(header):
+              if not header:
+                  return None
+              for part in header.split(","):
+                  pieces = [piece.strip() for piece in part.split(";")]
+                  if 'rel="next"' not in pieces or 'results="true"' not in pieces:
+                      continue
+                  return pieces[0].strip("<>")
+              return None
+
+          def sentry(method, url, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(url, data=data, method=method)
+              request.add_header("Authorization", f"Bearer {os.environ['SENTRY_TOKEN']}")
+              if body is not None:
+                  request.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      return response.status, response.headers.get("Link"), response.read()
+              except urllib.error.HTTPError as error:
+                  return error.code, error.headers.get("Link"), error.read()
+
+          def github_issues():
+              raw = gh([
+                  "api", "--paginate", "--jq",
+                  '.[] | select(.pull_request == null) | [.number, .title] | @tsv',
+                  f"/repos/{REPO}/issues?state=open&per_page=100",
+              ])
+              issues = []
+              for line in raw.splitlines():
+                  number, _, title = line.partition("\t")
+                  if number.isdigit():
+                      issues.append((int(number), title))
+              return issues
+
+          def open_pulls():
+              raw = gh([
+                  "pr", "list", "--repo", REPO, "--state", "open", "--limit", "200",
+                  "--json", "number,title,headRefName,headRepository",
+              ])
+              return json.loads(raw or "[]")
+
+          def empower_projects():
+              projects = []
+              url = f"{SENTRY_API}/api/0/organizations/{ORG}/projects/"
+              while url:
+                  status, link, raw = sentry("GET", url)
+                  if status != 200:
+                      raise RuntimeError(f"Listing Sentry projects failed ({status}): {raw[:300]!r}")
+                  projects.extend(json.loads(raw))
+                  url = next_link(link)
+              return sorted(project["slug"] for project in projects if project["slug"].startswith("empower-"))
+
+          def project_issues(slug):
+              found = {}
+              for query in ("is:unresolved", "is:resolved", "is:ignored"):
+                  url = (
+                      f"{SENTRY_API}/api/0/projects/{ORG}/{urllib.parse.quote(slug)}/issues/"
+                      f"?limit=100&query={urllib.parse.quote(query)}"
+                  )
+                  while url:
+                      status, link, raw = sentry("GET", url)
+                      if status != 200:
+                          raise RuntimeError(f"Listing {slug} issues failed ({status}): {raw[:300]!r}")
+                      for issue in json.loads(raw):
+                          found[issue["id"]] = issue.get("shortId") or issue["id"]
+                      url = next_link(link)
+              return found
+
+          def chunks(items, size):
+              items = list(items)
+              for start in range(0, len(items), size):
+                  yield items[start:start + size]
+
+          note("Dry run." if DRY_RUN else "Resetting the demo.")
+
+          issues = github_issues()
+          pulls = open_pulls()
+          projects = empower_projects()
+          sentry_issues = {slug: project_issues(slug) for slug in projects}
+
+          note(f"Open GitHub issues: {len(issues)}")
+          for number, title in issues:
+              note(f"  issue #{number}: {title}")
+          note(f"Open pull requests: {len(pulls)}")
+          for pull in pulls:
+              note(f"  PR #{pull['number']}: {pull['title']} ({pull['headRefName']})")
+          sentry_count = sum(len(ids) for ids in sentry_issues.values())
+          note(f"Sentry issues in empower-* projects: {sentry_count}")
+          for slug, ids in sentry_issues.items():
+              if ids:
+                  note(f"  {slug}: {', '.join(ids.values())}")
+
+          if DRY_RUN:
+              note("Dry run finished. Nothing was changed.")
+          else:
+              for pull in pulls:
+                  number = pull["number"]
+                  try:
+                      gh(["pr", "close", str(number), "--repo", REPO, "--comment", "Closed by the Reset demo workflow."])
+                      note(f"Closed PR #{number}.")
+                  except RuntimeError as error:
+                      failures.append(f"PR #{number}: {error}")
+                      continue
+                  owner = ((pull.get("headRepository") or {}).get("owner") or {}).get("login")
+                  name = (pull.get("headRepository") or {}).get("name")
+                  branch = pull.get("headRefName") or ""
+                  if f"{owner}/{name}" != REPO or branch in ("", "master", "main"):
+                      continue
+                  try:
+                      gh(["api", "--method", "DELETE", f"/repos/{REPO}/git/refs/heads/{urllib.parse.quote(branch, safe='')}"])
+                      note(f"Deleted branch {branch}.")
+                  except RuntimeError as error:
+                      failures.append(f"branch {branch}: {error}")
+
+              for number, _title in issues:
+                  try:
+                      gh(["api", "--method", "DELETE", f"/repos/{REPO}/issues/{number}"])
+                      note(f"Deleted GitHub issue #{number}.")
+                  except RuntimeError as error:
+                      try:
+                          gh(["issue", "close", str(number), "--repo", REPO, "--reason", "not planned", "--comment", "Closed by the Reset demo workflow. Delete was not permitted."])
+                          note(f"Closed GitHub issue #{number} because delete was denied.")
+                      except RuntimeError as close_error:
+                          failures.append(f"issue #{number}: {error}; close failed: {close_error}")
+
+              delete_denied = False
+              for slug, ids in sentry_issues.items():
+                  for batch in chunks(ids, 50):
+                      query = urllib.parse.urlencode([("id", issue_id) for issue_id in batch])
+                      url = f"{SENTRY_API}/api/0/projects/{ORG}/{urllib.parse.quote(slug)}/issues/?{query}"
+                      if not delete_denied:
+                          status, _link, raw = sentry("DELETE", url)
+                          if status in (200, 202, 204):
+                              note(f"Deleted {len(batch)} Sentry issue(s) from {slug}.")
+                              continue
+                          if status == 403:
+                              delete_denied = True
+                              note("Sentry denied issue deletion. The token needs event:admin. Resolving these issues instead.")
+                          else:
+                              failures.append(f"{slug} delete failed ({status}): {raw[:200]!r}")
+                              continue
+                      status, _link, raw = sentry("PUT", url, {"status": "resolved"})
+                      if status in (200, 202, 204):
+                          note(f"Resolved {len(batch)} Sentry issue(s) in {slug}.")
+                      else:
+                          failures.append(f"{slug} resolve failed ({status}): {raw[:200]!r}")
+
+              if delete_denied:
+                  note("Add event:admin to COPILOT_MCP_SENTRY_ACCESS_TOKEN and update the Actions secret to delete Sentry issues on the next run.")
+
+          with open(os.environ["SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Reset demo\n\n")
+              for line in lines:
+                  summary.write(f"- {line}\n")
+              if failures:
+                  summary.write("\n### Failures\n\n")
+                  for failure in failures:
+                      summary.write(f"- {failure}\n")
+
+          if failures:
+              print("Some cleanup steps failed:", file=sys.stderr)
+              for failure in failures:
+                  print(failure, file=sys.stderr)
+              sys.exit(1)
+          PY
