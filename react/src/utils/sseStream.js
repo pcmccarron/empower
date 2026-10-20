@@ -37,12 +37,24 @@ function parseFrame(frame) {
  * call throws.
  */
 export default async function postEventStream(url, { headers, body, signal, onEvent }) {
-  const response = await fetch(url, {
+  let response;
+  const options = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
     signal,
-  });
+  };
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        'Unable to reach the plant agent. Check your connection and try again.',
+        { cause: error }
+      );
+    }
+    throw error;
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`Chat request failed: HTTP ${response.status}`);
