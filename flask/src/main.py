@@ -354,8 +354,11 @@ def get_api_response_with_caching(key, delay):
                 redis_client.set("ruby.api.cache:" + str(key), key)
 
     except Exception as err:
-        logger.error('Processing /products - API request failed')
-        sentry_sdk.capture_exception(err)
+        if isinstance(err, requests.HTTPError) and err.response is not None and err.response.status_code == 403:
+            logger.warning('Processing /products - API request was forbidden')
+        else:
+            logger.error('Processing /products - API request failed')
+            sentry_sdk.capture_exception(err)
 
     return key
 
