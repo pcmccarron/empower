@@ -61,17 +61,18 @@ def get_products():
         query = text("SELECT * FROM products WHERE id IN (SELECT id from products, pg_sleep(:sleep_duration))")
         products = connection.execute(query, sleep_duration=n).fetchall()
 
-        for product in products:
+        reviews_by_product = {product.id: [] for product in products}
+        if products:
             # product_bundles is a "sleepy view", run the following query to get current sleep duration:
             # SELECT pg_get_viewdef('product_bundles', true)
-            query = text("SELECT * FROM reviews, product_bundles WHERE productId = :x")
-            reviews = connection.execute(query, x=product.id).fetchall()
-
-            result = dict(product)
-            result["reviews"] = []
-
+            query = text("SELECT * FROM reviews, product_bundles WHERE productId = ANY(:product_ids)")
+            reviews = connection.execute(query, product_ids=list(reviews_by_product)).fetchall()
             for review in reviews:
-                result["reviews"].append(dict(review))
+                reviews_by_product[review["productid"]].append(dict(review))
+
+        for product in products:
+            result = dict(product)
+            result["reviews"] = reviews_by_product[product.id]
             results.append(result)
 
         with sentry_sdk.start_span(name="get_products.combined_reviews.json", op="serialization"):
