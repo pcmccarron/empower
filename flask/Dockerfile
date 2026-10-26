@@ -6,4 +6,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["flask", "run", "--host", "0.0.0.0", "--port", "8080"]
+# Railway sets PORT. The dev server ignores it, so serve with gunicorn.
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:${PORT:-8080} -w 1 --timeout 120 src.main:app"]

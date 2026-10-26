@@ -10,7 +10,7 @@ mcp-servers:
     args:
       - "-y"
       - "@sentry/mcp-server@latest"
-      - "--organization-slug=pcmccarron"
+      - "--organization-slug=github-universe-demo"
       - "--skills=inspect,seer,triage"
     tools: ["*"]
     env:
@@ -21,7 +21,7 @@ A GitHub issue labeled `sentry` was assigned to you. It was created by the Sentr
 
 If this is not a Sentry alert for pcmccarron/empower, stop and make no changes.
 
-1. Extract the Sentry issue short ID or URL from the GitHub issue. Use the Sentry MCP server to get issue details, the latest event, the stack trace, related traces, and Seer's root cause analysis. The server is limited to organization `pcmccarron`. This monorepo can report into more than one project in that organization; use the project named on the issue.
+1. Extract the Sentry issue short ID or URL from the GitHub issue. Use the Sentry MCP server to get issue details, the latest event, the stack trace, related traces, and Seer's root cause analysis. The server is limited to organization `github-universe-demo`. This monorepo can report into more than one project in that organization; use the project named on the issue.
 2. Find the root cause in this repository. Empower Plant is a monorepo, and the stack trace names the service directory (`react`, `flask`, `express`, `vue`, `angular`, `next`, `go`, `laravel`, `ruby-on-rails`, `spring-boot`, `spring-boot-otlp`, `aspnetcore`, or `agent`). Change only that service. Write the smallest fix that addresses the root cause. No dependency upgrades unless the dependency is the root cause. No unrelated refactors, formatting changes, or CI edits.
 3. Add a regression test that reproduces the error, next to that service's existing tests. Install that service's dependencies if they are missing, then run its tests:
    - `react`: `cd react && CI=true npm test -- --watchAll=false`

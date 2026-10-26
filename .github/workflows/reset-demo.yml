@@ -62,7 +62,7 @@ jobs:
           import urllib.request
 
           REPO = os.environ["REPO"]
-          ORG = "pcmccarron"
+          ORG = "github-universe-demo"
           SENTRY_API = "https://us.sentry.io"
           DRY_RUN = os.environ["CONFIRM"] != "reset"
           SKIP_SENTRY = os.environ.get("SKIP_SENTRY") == "true"
