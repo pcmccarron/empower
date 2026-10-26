@@ -38,14 +38,11 @@ def get_plant_basic_info(plant_names: list) -> str:
         },
     }
 
-    if validate_plant_info.get():
-        raise Exception("Could not get plant basic info: Unknown plant")
-
     # Collect info for each plant
     info_list = []
     for plant_name in plant_names:
         plant_key = plant_name.lower().strip()
-        if plant_key in plant_db:
+        if plant_key in plant_db and not validate_plant_info.get():
             plant_info = plant_db[plant_key]
             info_list.append(
                 f"🌸 **{plant_name.title()} Basic Info**\n\n"
