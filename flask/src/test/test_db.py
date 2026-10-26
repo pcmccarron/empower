@@ -160,3 +160,44 @@
 
 # if __name__ == '__main__':
 #     unittest.main()
+
+import json
+import os
+import unittest
+from unittest.mock import Mock, patch
+
+
+class TestGetProducts(unittest.TestCase):
+    def test_fetches_reviews_for_all_products_in_one_query(self):
+        with patch.dict(os.environ, {
+            "DB_HOST": "localhost",
+            "DB_DATABASE": "test_db",
+            "DB_USERNAME": "test_user",
+            "DB_PASSWORD": "test_password",
+            "FLASK_ENVIRONMENT": "local",
+        }):
+            from .. import db as db_module
+
+        class Row(dict):
+            __getattr__ = dict.__getitem__
+
+        products = [Row(id=1, title="Product 1"), Row(id=2, title="Product 2")]
+        reviews = [Row(id=11, productId=1, rating=5), Row(id=12, productId=2, rating=4)]
+        connection = Mock()
+        connection.execute.side_effect = [
+            Mock(fetchall=Mock(return_value=products)),
+            Mock(fetchall=Mock(return_value=reviews)),
+        ]
+
+        with patch.object(db_module.db, "connect", return_value=connection), \
+             patch.object(db_module, "weighter", return_value=0.1):
+            result = json.loads(db_module.get_products())
+
+        self.assertEqual(len(connection.execute.call_args_list), 2)
+        review_query = connection.execute.call_args_list[1]
+        self.assertIn("productId = ANY(:product_ids)", str(review_query.args[0]))
+        self.assertEqual(review_query.kwargs["product_ids"], [1, 2])
+        self.assertEqual([product["reviews"] for product in result], [
+            [{"id": 11, "productId": 1, "rating": 5}],
+            [{"id": 12, "productId": 2, "rating": 4}],
+        ])
