@@ -47,7 +47,7 @@ jobs:
       - name: Close pull requests and clear demo issues
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_PAT }}
-          SENTRY_TOKEN: ${{ secrets.SENTRY_RESET_TOKEN || secrets.COPILOT_MCP_SENTRY_ACCESS_TOKEN }}
+          SENTRY_TOKEN: ${{ secrets.COPILOT_MCP_SENTRY_ACCESS_TOKEN }}
           CONFIRM: ${{ inputs.confirm }}
           SKIP_SENTRY: ${{ inputs.skip_sentry }}
           REPO: ${{ github.repository }}
