@@ -1,17 +1,17 @@
 # Reset the Copilot demo on this fork.
 #
 # Run this from the Actions tab when you want a clean slate. It closes open
-# pull requests, deletes open GitHub issues, and removes Sentry issues in the
+# pull requests, deletes open GitHub issues, and clears Sentry issues in the
 # empower-* projects. The next new error can then open a fresh GitHub issue.
 #
-# Type "reset" in the confirm field. Use dry_run first to see the list.
+# Pick "reset" in the confirm dropdown. Choose "dry-run" to see the list first.
 #
-# Secrets (both are Actions secrets, not Agents secrets):
+# Secrets (Actions secrets — a workflow cannot read Agents secrets):
 #   COPILOT_ASSIGN_PAT — user token that can close pull requests and delete
 #     issues on pcmccarron/empower.
-#   COPILOT_MCP_SENTRY_ACCESS_TOKEN — Sentry user token. Deleting issues
-#     requires event:admin. With only event:write, this workflow resolves the
-#     Sentry issues instead, and the existing alert still fires on regression.
+#   SENTRY_RESET_TOKEN — Sentry user token. Deleting issues needs event:admin.
+#     With only event:write this workflow resolves them instead, and the
+#     existing alert still fires when an error comes back.
 
 name: Reset demo
 
@@ -19,11 +19,15 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type reset to close pull requests and delete the demo issues"
+        description: "Reset the demo?"
         required: true
-        type: string
-      dry_run:
-        description: "List what would change, then stop"
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - reset
+      skip_sentry:
+        description: "GitHub only, leave Sentry issues alone"
         required: false
         type: boolean
         default: false
@@ -40,14 +44,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Close pull requests and delete demo issues
+      - name: Close pull requests and clear demo issues
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_PAT }}
-          SENTRY_TOKEN: ${{ secrets.COPILOT_MCP_SENTRY_ACCESS_TOKEN }}
+          SENTRY_TOKEN: ${{ secrets.SENTRY_RESET_TOKEN || secrets.COPILOT_MCP_SENTRY_ACCESS_TOKEN }}
           CONFIRM: ${{ inputs.confirm }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          SKIP_SENTRY: ${{ inputs.skip_sentry }}
           REPO: ${{ github.repository }}
-          SUMMARY: ${{ github.step_summary }}
         run: |
           python3 << 'PY'
           import json
@@ -61,37 +64,64 @@ jobs:
           REPO = os.environ["REPO"]
           ORG = "pcmccarron"
           SENTRY_API = "https://us.sentry.io"
-          DRY_RUN = os.environ.get("DRY_RUN", "false") == "true"
+          DRY_RUN = os.environ["CONFIRM"] != "reset"
+          SKIP_SENTRY = os.environ.get("SKIP_SENTRY") == "true"
+          SENTRY_TOKEN = os.environ.get("SENTRY_TOKEN", "")
           failures = []
+          warnings = []
           lines = []
 
           def note(message):
-              print(message)
+              print(message, flush=True)
               lines.append(message)
 
-          if os.environ.get("CONFIRM") != "reset":
-              note("Confirmation was not reset. Nothing was changed.")
-              sys.exit(1)
-          if REPO != "pcmccarron/empower":
-              note(f"Refusing to run on {REPO}. This reset is only for pcmccarron/empower.")
-              sys.exit(1)
-          if not os.environ.get("GH_TOKEN"):
-              note("COPILOT_ASSIGN_PAT is not set.")
-              sys.exit(1)
-          if not os.environ.get("SENTRY_TOKEN"):
-              note("COPILOT_MCP_SENTRY_ACCESS_TOKEN is not set.")
-              sys.exit(1)
+          def warn(message):
+              print(f"::warning::{message}", flush=True)
+              warnings.append(message)
 
-          def gh(args):
-              result = subprocess.run(
-                  ["gh", *args],
-                  text=True,
-                  capture_output=True,
-                  check=False,
+          def write_summary():
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not path:
+                  return
+              with open(path, "a", encoding="utf-8") as summary:
+                  summary.write("## Reset demo\n\n")
+                  for line in lines:
+                      summary.write(f"- {line}\n")
+                  for title, items in (("Skipped", warnings), ("Failed", failures)):
+                      if items:
+                          summary.write(f"\n### {title}\n\n")
+                          for item in items:
+                              summary.write(f"- {item}\n")
+
+          def finish():
+              write_summary()
+              for failure in failures:
+                  print(f"::error::{failure}", flush=True)
+              sys.exit(1 if failures else 0)
+
+          if REPO != "pcmccarron/empower":
+              failures.append(f"Refusing to run on {REPO}. This reset is only for pcmccarron/empower.")
+              finish()
+          if not os.environ.get("GH_TOKEN"):
+              failures.append("COPILOT_ASSIGN_PAT is not set, so nothing can be changed.")
+              finish()
+
+          sentry_enabled = True
+          if SKIP_SENTRY:
+              note("Sentry was skipped by request. Only GitHub will be reset.")
+              sentry_enabled = False
+          elif not SENTRY_TOKEN:
+              warn(
+                  "Sentry issues were left in place. Add an Actions secret named SENTRY_RESET_TOKEN; "
+                  "a workflow cannot read the Agents secret that Copilot uses."
               )
-              if result.returncode != 0:
+              sentry_enabled = False
+
+          def gh(args, check=True):
+              result = subprocess.run(["gh", *args], text=True, capture_output=True, check=False)
+              if check and result.returncode != 0:
                   detail = (result.stderr or result.stdout).strip()
-                  raise RuntimeError(detail or f"gh {' '.join(args)} failed")
+                  raise RuntimeError(detail.splitlines()[0] if detail else f"gh {' '.join(args)} failed")
               return result.stdout
 
           def next_link(header):
@@ -99,15 +129,14 @@ jobs:
                   return None
               for part in header.split(","):
                   pieces = [piece.strip() for piece in part.split(";")]
-                  if 'rel="next"' not in pieces or 'results="true"' not in pieces:
-                      continue
-                  return pieces[0].strip("<>")
+                  if 'rel="next"' in pieces and 'results="true"' in pieces:
+                      return pieces[0].strip("<>")
               return None
 
           def sentry(method, url, body=None):
               data = None if body is None else json.dumps(body).encode()
               request = urllib.request.Request(url, data=data, method=method)
-              request.add_header("Authorization", f"Bearer {os.environ['SENTRY_TOKEN']}")
+              request.add_header("Authorization", f"Bearer {SENTRY_TOKEN}")
               if body is not None:
                   request.add_header("Content-Type", "application/json")
               try:
@@ -116,17 +145,17 @@ jobs:
               except urllib.error.HTTPError as error:
                   return error.code, error.headers.get("Link"), error.read()
 
-          def github_issues():
+          def open_issues():
               raw = gh([
                   "api", "--paginate", "--jq",
-                  '.[] | select(.pull_request == null) | [.number, .title] | @tsv',
+                  '.[] | select(.pull_request == null) | [.number, .node_id, .title] | @tsv',
                   f"/repos/{REPO}/issues?state=open&per_page=100",
               ])
               issues = []
               for line in raw.splitlines():
-                  number, _, title = line.partition("\t")
-                  if number.isdigit():
-                      issues.append((int(number), title))
+                  parts = line.split("\t")
+                  if len(parts) == 3 and parts[0].isdigit():
+                      issues.append({"number": int(parts[0]), "node_id": parts[1], "title": parts[2]})
               return issues
 
           def open_pulls():
@@ -142,10 +171,10 @@ jobs:
               while url:
                   status, link, raw = sentry("GET", url)
                   if status != 200:
-                      raise RuntimeError(f"Listing Sentry projects failed ({status}): {raw[:300]!r}")
+                      raise RuntimeError(f"listing projects failed ({status}): {raw[:200]!r}")
                   projects.extend(json.loads(raw))
                   url = next_link(link)
-              return sorted(project["slug"] for project in projects if project["slug"].startswith("empower-"))
+              return sorted(p["slug"] for p in projects if p["slug"].startswith("empower-"))
 
           def project_issues(slug):
               found = {}
@@ -157,7 +186,7 @@ jobs:
                   while url:
                       status, link, raw = sentry("GET", url)
                       if status != 200:
-                          raise RuntimeError(f"Listing {slug} issues failed ({status}): {raw[:300]!r}")
+                          raise RuntimeError(f"listing {slug} issues failed ({status}): {raw[:200]!r}")
                       for issue in json.loads(raw):
                           found[issue["id"]] = issue.get("shortId") or issue["id"]
                       url = next_link(link)
@@ -168,58 +197,81 @@ jobs:
               for start in range(0, len(items), size):
                   yield items[start:start + size]
 
-          note("Dry run." if DRY_RUN else "Resetting the demo.")
+          note("Dry run. Nothing will be changed." if DRY_RUN else "Resetting the demo.")
 
-          issues = github_issues()
-          pulls = open_pulls()
-          projects = empower_projects()
-          sentry_issues = {slug: project_issues(slug) for slug in projects}
+          try:
+              issues = open_issues()
+              pulls = open_pulls()
+          except RuntimeError as error:
+              failures.append(f"Could not read GitHub issues or pull requests: {error}")
+              finish()
+
+          sentry_issues = {}
+          if sentry_enabled:
+              try:
+                  sentry_issues = {slug: project_issues(slug) for slug in empower_projects()}
+              except RuntimeError as error:
+                  failures.append(f"Could not read Sentry: {error}")
+                  sentry_enabled = False
 
           note(f"Open GitHub issues: {len(issues)}")
-          for number, title in issues:
-              note(f"  issue #{number}: {title}")
+          for issue in issues:
+              note(f"  issue #{issue['number']}: {issue['title']}")
           note(f"Open pull requests: {len(pulls)}")
           for pull in pulls:
               note(f"  PR #{pull['number']}: {pull['title']} ({pull['headRefName']})")
-          sentry_count = sum(len(ids) for ids in sentry_issues.values())
-          note(f"Sentry issues in empower-* projects: {sentry_count}")
-          for slug, ids in sentry_issues.items():
-              if ids:
-                  note(f"  {slug}: {', '.join(ids.values())}")
+          if sentry_enabled:
+              total = sum(len(ids) for ids in sentry_issues.values())
+              note(f"Sentry issues in empower-* projects: {total}")
+              for slug, ids in sentry_issues.items():
+                  if ids:
+                      note(f"  {slug}: {', '.join(sorted(ids.values()))}")
 
           if DRY_RUN:
-              note("Dry run finished. Nothing was changed.")
-          else:
-              for pull in pulls:
-                  number = pull["number"]
-                  try:
-                      gh(["pr", "close", str(number), "--repo", REPO, "--comment", "Closed by the Reset demo workflow."])
-                      note(f"Closed PR #{number}.")
-                  except RuntimeError as error:
-                      failures.append(f"PR #{number}: {error}")
-                      continue
-                  owner = ((pull.get("headRepository") or {}).get("owner") or {}).get("login")
-                  name = (pull.get("headRepository") or {}).get("name")
-                  branch = pull.get("headRefName") or ""
-                  if f"{owner}/{name}" != REPO or branch in ("", "master", "main"):
-                      continue
-                  try:
-                      gh(["api", "--method", "DELETE", f"/repos/{REPO}/git/refs/heads/{urllib.parse.quote(branch, safe='')}"])
-                      note(f"Deleted branch {branch}.")
-                  except RuntimeError as error:
-                      failures.append(f"branch {branch}: {error}")
+              note("Dry run finished. Pick reset in the confirm dropdown to apply this.")
+              finish()
 
-              for number, _title in issues:
-                  try:
-                      gh(["api", "--method", "DELETE", f"/repos/{REPO}/issues/{number}"])
-                      note(f"Deleted GitHub issue #{number}.")
-                  except RuntimeError as error:
-                      try:
-                          gh(["issue", "close", str(number), "--repo", REPO, "--reason", "not planned", "--comment", "Closed by the Reset demo workflow. Delete was not permitted."])
-                          note(f"Closed GitHub issue #{number} because delete was denied.")
-                      except RuntimeError as close_error:
-                          failures.append(f"issue #{number}: {error}; close failed: {close_error}")
+          for pull in pulls:
+              number = pull["number"]
+              try:
+                  gh(["pr", "close", str(number), "--repo", REPO, "--comment", "Closed by the Reset demo workflow."])
+                  note(f"Closed PR #{number}.")
+              except RuntimeError as error:
+                  failures.append(f"PR #{number}: {error}")
+                  continue
+              head = pull.get("headRepository") or {}
+              owner = (head.get("owner") or {}).get("login")
+              branch = pull.get("headRefName") or ""
+              if f"{owner}/{head.get('name')}" != REPO or branch in ("", "master", "main"):
+                  continue
+              ref = urllib.parse.quote(branch, safe="")
+              try:
+                  gh(["api", "--method", "DELETE", f"/repos/{REPO}/git/refs/heads/{ref}"])
+                  note(f"Deleted branch {branch}.")
+              except RuntimeError as error:
+                  failures.append(f"branch {branch}: {error}")
 
+          # There is no REST endpoint for deleting an issue; only the GraphQL
+          # mutation can, and only the repository owner is allowed to use it.
+          delete_issue = "mutation($id: ID!) { deleteIssue(input: {issueId: $id}) { clientMutationId } }"
+          for issue in issues:
+              number = issue["number"]
+              try:
+                  gh(["api", "graphql", "-f", f"query={delete_issue}", "-F", f"id={issue['node_id']}"])
+                  note(f"Deleted GitHub issue #{number}.")
+                  continue
+              except RuntimeError as error:
+                  delete_error = error
+              try:
+                  gh([
+                      "issue", "close", str(number), "--repo", REPO, "--reason", "not planned",
+                      "--comment", "Closed by the Reset demo workflow. This token cannot delete issues.",
+                  ])
+                  note(f"Closed GitHub issue #{number}. Delete was refused: {delete_error}")
+              except RuntimeError as close_error:
+                  failures.append(f"issue #{number}: delete failed ({delete_error}); close failed ({close_error})")
+
+          if sentry_enabled:
               delete_denied = False
               for slug, ids in sentry_issues.items():
                   for batch in chunks(ids, 50):
@@ -230,9 +282,9 @@ jobs:
                           if status in (200, 202, 204):
                               note(f"Deleted {len(batch)} Sentry issue(s) from {slug}.")
                               continue
-                          if status == 403:
+                          if status in (401, 403):
                               delete_denied = True
-                              note("Sentry denied issue deletion. The token needs event:admin. Resolving these issues instead.")
+                              note("Sentry refused deletion. Resolving these issues instead.")
                           else:
                               failures.append(f"{slug} delete failed ({status}): {raw[:200]!r}")
                               continue
@@ -241,22 +293,9 @@ jobs:
                           note(f"Resolved {len(batch)} Sentry issue(s) in {slug}.")
                       else:
                           failures.append(f"{slug} resolve failed ({status}): {raw[:200]!r}")
-
               if delete_denied:
-                  note("Add event:admin to COPILOT_MCP_SENTRY_ACCESS_TOKEN and update the Actions secret to delete Sentry issues on the next run.")
+                  warn("Add event:admin to SENTRY_RESET_TOKEN to delete Sentry issues instead of resolving them.")
 
-          with open(os.environ["SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Reset demo\n\n")
-              for line in lines:
-                  summary.write(f"- {line}\n")
-              if failures:
-                  summary.write("\n### Failures\n\n")
-                  for failure in failures:
-                      summary.write(f"- {failure}\n")
-
-          if failures:
-              print("Some cleanup steps failed:", file=sys.stderr)
-              for failure in failures:
-                  print(failure, file=sys.stderr)
-              sys.exit(1)
+          note("Reset finished.")
+          finish()
           PY
