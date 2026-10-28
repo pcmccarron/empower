@@ -1,11 +1,9 @@
-"""The plant-lookup failure triggers, on the real /chat route.
+"""The plant-lookup query flags, on the real /chat route.
 
 `agent_advice_error` / `agent_info_error` are set on the page URL; ChatWidget.jsx
 maps them onto ?validate_plant_advice / ?validate_plant_info on the agent
-request. /buy-plants read them from the start. /chat did not, which quietly
-killed both demo error paths for the conversational flow — including in
-_tda/desktop_web/test_ai_agent.py, which still appends those page params and
-still drives the chat widget.
+request. The advice flag still triggers a demo failure; the info flag is
+retained for compatibility without making basic-info lookups fail.
 
 These go through the router rather than calling set_plant_failure_flags()
 directly, so removing the call from the endpoint fails them. `stream_turn` is

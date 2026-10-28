@@ -5,7 +5,7 @@ from typing import Any
 
 from agents import FunctionTool
 
-from ..utils import validate_plant_advice, validate_plant_info
+from ..utils import validate_plant_advice
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -37,9 +37,6 @@ def get_plant_basic_info(plant_names: list) -> str:
             "tips": "Spring bulb flower. Plant bulbs in fall for spring blooms.",
         },
     }
-
-    if validate_plant_info.get():
-        raise Exception("Could not get plant basic info: Unknown plant")
 
     # Collect info for each plant
     info_list = []
