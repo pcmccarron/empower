@@ -389,7 +389,7 @@ def handled_exception():
     logger.info('Received /handled endpoint request')
 
     try:
-        '2' + 2
+        '2' + str(2)
     except Exception as err:
         logger.error('Processing /handled - intentional exception occurred')
         sentry_sdk.capture_exception(err)
