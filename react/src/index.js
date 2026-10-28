@@ -308,10 +308,18 @@ class App extends Component {
       PRODUCTS_API = 'products-join';
       currentScope.setTag('api', 'products-join');
       currentScope.setAttribute('api', 'products-join');
-    } else {
+    } else if (
+      queryParams.has('api') ||
+      PRODUCTS_EXTREMELY_SLOW ||
+      PRODUCTS_BE_ERROR
+    ) {
       PRODUCTS_API = 'products';
       currentScope.setTag('api', 'products');
       currentScope.setAttribute('api', 'products');
+    } else {
+      PRODUCTS_API = 'products-join';
+      currentScope.setTag('api', 'products-join');
+      currentScope.setAttribute('api', 'products-join');
     }
 
     if (queryParams.get('rageclick') === 'true') {

@@ -13,6 +13,7 @@ jest.mock('@sentry/react', () => ({
   captureException: jest.fn(),
   setContext: jest.fn(),
   startSpan: jest.fn(),
+  metrics: { distribution: jest.fn() },
   withProfiler: (Component) => Component,
 }));
 
@@ -84,6 +85,48 @@ describe('Products Component', () => {
     // expect(screen.getByText('Product 2')).toBeInTheDocument();
     // expect(screen.getByText('Description 2')).toBeInTheDocument();
     // expect(screen.getAllByTestId('product-card')).toHaveLength(2);
+  });
+
+  test('uses the optimized products endpoint by default', async () => {
+    Sentry.startSpan.mockImplementationOnce((options, callback) =>
+      callback({})
+    );
+
+    render(
+      <Provider store={store}>
+        <Products frontendSlowdown={false} backend="http://backend" />
+      </Provider>
+    );
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        'http://backend/products-join',
+        expect.objectContaining({ method: 'GET' })
+      )
+    );
+  });
+
+  test('keeps the slow products fixture on its configured endpoint', async () => {
+    Sentry.startSpan.mockImplementationOnce((options, callback) =>
+      callback({})
+    );
+
+    render(
+      <Provider store={store}>
+        <Products
+          frontendSlowdown={false}
+          backend="http://backend"
+          productsExtremelySlow={true}
+        />
+      </Provider>
+    );
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        'http://backend/products?fetch_promotions=true',
+        expect.objectContaining({ method: 'GET' })
+      )
+    );
   });
 
   test('fetches uncompressed assets when frontendSlowdown is true', async () => {

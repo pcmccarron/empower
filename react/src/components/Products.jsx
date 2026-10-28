@@ -9,23 +9,21 @@ import ProductCard from './ProductCard';
 import { useState, useEffect, useRef } from 'react';
 import { updateStatsigUserAndEvaluate } from '../utils/statsig';
 
-function Products({ frontendSlowdown, backend, productsApi, productsExtremelySlow, productsBeError, addToCartJsError }) {
+function Products({ frontendSlowdown, backend, productsApi = 'products-join', productsExtremelySlow, productsBeError, addToCartJsError }) {
   const [products, setProducts] = useState([]);
   const startTime = useRef(performance.now());
   const productsRendered = useRef(false);
 
   function determineProductsEndpoint() {
-    if (productsApi !== 'products-join') {
-      if (productsExtremelySlow) {
-        return '/products?fetch_promotions=true';
-      } else if (productsBeError) {
-        return '/products?in_stock_only=1';
-      } else {
-        return frontendSlowdown ? '/products-join' : '/products';
-      }
-    } else {
-      return '/products-join';
+    if (productsExtremelySlow) {
+      return '/products?fetch_promotions=true';
     }
+    if (productsBeError) {
+      return '/products?in_stock_only=1';
+    }
+    return frontendSlowdown || productsApi === 'products-join'
+      ? '/products-join'
+      : '/products';
   }
 
   function fetchUncompressedAsset() {
