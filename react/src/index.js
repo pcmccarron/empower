@@ -47,6 +47,7 @@ const tracingOrigins = [
   'run.app',
   'appspot.com',
   'empower-agent.sentry.gg',
+  'up.railway.app',
   /^\//,
 ];
 
