@@ -65,10 +65,10 @@ async def _invoke_plant_advice(context: Any, input_json: str) -> str:
     """Invoke the plant advice tool."""
     import json
 
-    if validate_plant_advice.get():
-        raise Exception("Could not get plant advice: File not found")
-
     try:
+        if validate_plant_advice.get():
+            raise Exception("Could not get plant advice: File not found")
+
         logging.debug(f"Invoking get_plant_basic_info with input: {input_json}")
         params = json.loads(input_json)
         plant_names = params.get("plant_names", [])
