@@ -401,7 +401,7 @@ def unhandled_exception():
     logger.info('Received /unhandled endpoint request')
 
     obj = {}
-    obj['keyDoesnt  Exist']
+    return jsonify(obj)
 
 
 @app.route('/api', methods=['GET'])
