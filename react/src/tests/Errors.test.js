@@ -1,5 +1,8 @@
 import { crasher, UnhandledException } from '../utils/errors';
 import { createBrowserHistory } from 'history';
+import * as Sentry from '@sentry/react';
+import React from 'react';
+import { render, screen } from '@testing-library/react';
 
 describe('Errors module', () => {
   let originalMathRandom;
@@ -63,5 +66,28 @@ describe('Errors module', () => {
     setQueryParams({ crash: '0.1' });
     Math.random = jest.fn(() => 0.2); // This should not cause the error to be thrown
     expect(() => crasher()).not.toThrow();
+  });
+
+  test('should show a fallback when a constructor crashes during app startup', () => {
+    setQueryParams({ crash: 'true', errnum: '4' });
+
+    class CrashingApp extends React.Component {
+      constructor(props) {
+        super(props);
+        crasher();
+      }
+
+      render() {
+        return null;
+      }
+    }
+
+    render(
+      <Sentry.ErrorBoundary fallback={<div>An error has occurred.</div>}>
+        <CrashingApp />
+      </Sentry.ErrorBoundary>
+    );
+
+    expect(screen.getByText('An error has occurred.')).toBeTruthy();
   });
 });
