@@ -434,7 +434,11 @@ def apply_promo_code():
     logger.info('[/apply-promo-code] request received')
 
     try:
-        body = json.loads(request.data)
+        body = request.get_json(force=True, silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get('value', ''), str):
+            logger.warning('[/apply-promo-code] bad request - invalid request body')
+            return '', 400
+
         promo_code = body.get('value', '').strip()
         
         if not promo_code:
