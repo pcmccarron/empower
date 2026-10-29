@@ -471,4 +471,9 @@ class App extends Component {
 }
 
 // React-router in use here https://reactrouter.com/web/guides/quick-start
-ReactDOM.render(<App />, document.getElementById('root'));
+ReactDOM.render(
+  <Sentry.ErrorBoundary fallback={<div>An error has occurred.</div>}>
+    <App />
+  </Sentry.ErrorBoundary>,
+  document.getElementById('root')
+);
